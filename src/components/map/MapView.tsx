@@ -12,7 +12,7 @@ const MAP_STYLE = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json
 const INITIAL_VIEW_STATE = {
   longitude: -119.5,
   latitude: 37.0,
-  zoom: 5.0, // Zoomed out slightly to see all of California
+  zoom: 5.0, 
   pitch: 0,
   bearing: 0,
 };
@@ -22,27 +22,28 @@ export default function MapView({className}: {className?: string}) {
 
   // 1. Execute our REACTIVE spatial join query in DuckDB using Mosaic
   const { data, isLoading } = useMosaicClient<Table>({
-    // 👇 FIX 1: Tell Mosaic to listen to the default global filters
     selectionName: 'brush', 
     query: (filter: any) => {
       const baseQuery = sql`
         WITH filtered_bonds AS (
-          -- We use Mosaic's AST builder to automatically apply the UI filters!
+          -- Apply the UI filters!
           ${Query.from('bonds').select('IssuerCounty', 'PrincipalAmount').where(filter)}
         ),
         split_bonds AS (
-          -- Unnest the semicolon-separated counties in your filtered data
+          -- 1. Split the string into an array.
+          -- 2. Divide the PrincipalAmount by the length of that array.
+          -- 3. Unnest it!
           SELECT 
             UNNEST(string_split(IssuerCounty, '; ')) AS CountyName,
-            PrincipalAmount
+            (PrincipalAmount / length(string_split(IssuerCounty, '; '))) AS SplitAmount
           FROM filtered_bonds
           WHERE IssuerCounty IS NOT NULL AND IssuerCounty != 'State of California'
         ),
         county_funding AS (
-          -- Sum up total bond funding per county
+          -- Sum up the newly split amounts per county
           SELECT 
             CountyName,
-            SUM(PrincipalAmount) AS Total_Bond_Funding
+            SUM(SplitAmount) AS Total_Bond_Funding
           FROM split_bonds
           GROUP BY CountyName
         )
@@ -50,10 +51,7 @@ export default function MapView({className}: {className?: string}) {
         SELECT 
           c.NAME10 AS CountyName,
           COALESCE(f.Total_Bond_Funding, 0) AS Funding_Amount,
-          
-          -- 👇 FIX 2: Bringing back our magic Web Mercator projection fix!
           ST_AsGeoJSON(ST_FlipCoordinates(ST_Transform(c.geometry, 'EPSG:3857', 'EPSG:4326'))) AS geojson
-          
         FROM counties c
         LEFT JOIN county_funding f ON c.NAME10 = f.CountyName
       `;
@@ -66,13 +64,6 @@ export default function MapView({className}: {className?: string}) {
   const geojsonData = useMemo(() => {
     if (!data) return null;
     const rows = data.toArray() as any[];
-    
-    // 👇 ADD THIS CONSOLE LOG HERE 👇
-    if (rows.length > 0) {
-       const geom = JSON.parse(rows[0].geojson);
-       // Force the browser to print the actual coordinate numbers as a string!
-       console.log("RAW NUMBERS:", JSON.stringify(geom.coordinates[0][0].slice(0, 3)));
-    }
     
     return {
       type: 'FeatureCollection',
@@ -101,9 +92,18 @@ export default function MapView({className}: {className?: string}) {
       getLineColor: [255, 255, 255, 255],
       getFillColor: (d: any) => {
          const funding = d.properties.Funding_Amount || 0;
-         // Scale color intensity based on funding amount
-         const intensity = Math.min(255, (funding / 500000000) * 255);
-         return [intensity, 50, 150, 200]; // Creates a nice blue scale
+         
+         // Discrete Color Bands for wider visual divergence
+         if (funding === 0) return [30, 40, 50, 150]; // Dark gray/empty
+         if (funding < 1_000_000_000) return [198, 219, 239, 200]; // < $1B (Lightest Blue)
+         if (funding < 5_000_000_000) return [158, 202, 225, 200]; // < $5B
+         if (funding < 10_000_000_000) return [107, 174, 214, 200]; // < $10B
+         if (funding < 25_000_000_000) return [66, 146, 198, 200]; // < $25B
+         if (funding < 50_000_000_000) return [33, 113, 181, 200]; // < $50B
+         return [8, 69, 148, 200]; // > $50B (Deepest Blue)
+      },
+      updateTriggers: {
+        getFillColor: [geojsonData] // Repaint instantly if data changes
       }
     });
   }, [geojsonData]);
@@ -119,11 +119,15 @@ export default function MapView({className}: {className?: string}) {
           getTooltip={({object}: any) => {
             if (!object) return null;
             const props = object.properties;
+            
+            // Format to Billions
+            const fundingInBillions = (props.Funding_Amount / 1_000_000_000).toFixed(2);
+            
             return {
               html: `
                 <div style="font-family:system-ui; font-size:12px; padding:4px;">
                   <strong>${props.CountyName}</strong><br/>
-                  Total Bond Funding: $${(props.Funding_Amount / 1000000).toFixed(2)}M
+                  Total Bond Funding: $${fundingInBillions}B
                 </div>
               `
             };
