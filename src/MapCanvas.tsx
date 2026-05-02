@@ -1,3 +1,4 @@
+import { useSql } from '@sqlrooms/duckdb';
 import { useMosaicClient, Query, sql } from '@sqlrooms/mosaic';
 import DeckGL from '@deck.gl/react';
 import { GeoJsonLayer } from '@deck.gl/layers';
@@ -6,29 +7,19 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { useMemo, useEffect, useState } from 'react';
 import { useRoomStore } from './store';
 
-const INITIAL_VIEW_STATE = {
-  longitude: -119.5,
-  latitude: 37.5,
-  zoom: 5,
-  pitch: 0,
-  bearing: 0
-};
+const INITIAL_VIEW_STATE = { longitude: -119.5, latitude: 37.5, zoom: 5, pitch: 0, bearing: 0 };
 
-// Helper to format currency in the tooltip
 const formatMoney = (amount: number) => {
-  return new Intl.NumberFormat('en-US', { 
-    style: 'currency', currency: 'USD', maximumFractionDigits: 0 
-  }).format(amount);
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(amount);
 };
 
 export default function MapCanvas() {
   const countiesReady = useRoomStore((state) => state.db.findTableByName('counties'));
   const bondsReady = useRoomStore((state) => state.db.findTableByName('bonds'));
   const getConnector = useRoomStore((state) => state.db.getConnector);
-  
+
   const [spatialReady, setSpatialReady] = useState(false);
 
-  // 1. Explicitly load the Spatial Extension
   useEffect(() => {
     getConnector().then(async (connector: any) => {
       await connector.query('INSTALL spatial; LOAD spatial;');
@@ -36,101 +27,128 @@ export default function MapCanvas() {
     }).catch(console.error);
   }, [getConnector]);
 
-  // 2. The Mosaic Client: Subscribes to the Control Center's dropdown!
-  const { data, isLoading } = useMosaicClient({
+  // 1. STATIC GEOMETRY: Load map shapes safely
+  const { data: countiesData } = useSql({
+    query: `
+      SELECT 
+        NAME10 as "CountyName",
+        ST_AsGeoJSON(ST_FlipCoordinates(ST_Transform(geometry, 'EPSG:3857', 'EPSG:4326'))) as "geojson"
+      FROM counties
+    `,
+    // ONLY execute when both tables and spatial extension are fully loaded
+    enabled: Boolean(countiesReady && spatialReady) 
+  });
+
+  // 2. REACTIVE FINANCE: Mounts immediately to prevent the "null" connection error!
+  const { data: fundingData } = useMosaicClient({
     selectionName: 'brush', 
     query: (filter: any) => {
-      // Dummy query while data lakes and GIS engines boot up
-      if (!countiesReady || !bondsReady || !spatialReady) {
-        // A perfectly valid standalone SELECT with a proper selection list!
-        return Query.select({ loading_placeholder: sql`1` as any });
+      // Send a safe dummy query until the CSV is fully downloaded
+      if (!bondsReady) {
+        return Query.select({ loading_placeholder: sql`1` as any }).limit(0);
       }
-      // A. Explode the messy strings and apply the Mosaic filter
-      const filteredBonds = Query.from('bonds')
+      
+      // Once ready, ask for the raw string and money
+      return Query.from('bonds')
         .select({
-          CountyName: sql`UNNEST(string_split(IssuerCounty, '; '))` as any,
-          PrincipalAmount: 'PrincipalAmount'
-        })
-        .where(filter);
-
-      // B. Sum the funding by county
-      const funding = Query.from(filteredBonds)
-        .select({
-          CountyName: 'CountyName',
+          IssuerCounty: 'IssuerCounty',
           total_funding: sql`SUM(PrincipalAmount)` as any
         })
-        .groupby('CountyName');
-
-      // C. Spatial Join!
-      return Query
-        .with({ funding_cte: funding })
-        .from(sql`counties c LEFT JOIN funding_cte b ON c.NAME10 = b.CountyName` as any)
-        .select({
-          CountyName: sql`c.NAME10` as any,
-          total_funding: sql`COALESCE(b.total_funding, 0)` as any,
-          geojson: sql`ST_AsGeoJSON(ST_FlipCoordinates(ST_Transform(c.geometry, 'EPSG:3857', 'EPSG:4326')))` as any
-        });
+        .where(filter)
+        .groupby('IssuerCounty');
     }
   });
 
-  // 3. Safely parse the GeoJSON and inject the funding data
-  const geojsonData = useMemo(() => {
-    if (!data) return null;
-    
+  // 3. Prepare the Map Shapes
+  const geojsonFeatures = useMemo(() => {
+    if (!countiesData) return null;
     try {
       const features: any[] = [];
-      // Bypass the missing TypeScript definition for Apache Arrow tables
-      const rows = (data as any).toArray(); 
+      const rows = (countiesData as any).toArray(); 
       for (let i = 0; i < rows.length; i++) {
         const row = rows[i] as any;
-        if (row.geojson) {
+        const cName = row.CountyName || row.countyname;
+        const gJson = row.geojson || row.Geojson;
+
+        if (gJson && cName) {
           features.push({
             type: 'Feature',
-            geometry: JSON.parse(row.geojson),
+            geometry: JSON.parse(gJson),
             properties: { 
-              name: row.CountyName,
-              total_funding: row.total_funding
+              name: cName,
+              matchKey: String(cName).trim().toUpperCase() 
             }
           });
         }
       }
-      return { type: 'FeatureCollection', features };
+      return features;
     } catch (e) {
       console.error("Error parsing GeoJSON", e);
       return null;
     }
-  }, [data]);
+  }, [countiesData]);
 
-  // 4. Create the Deck.gl Choropleth Layer
-  const layer = new GeoJsonLayer({
-    id: 'counties-funding-layer',
-    data: geojsonData as any,
-    pickable: true,
-    stroked: true,
-    filled: true,
-    lineWidthMinPixels: 1,
-    getLineColor: [255, 255, 255, 100],
-    getFillColor: ({ properties }: any) => {
-      const funding = properties.total_funding;
-      // Dynamic Choropleth Coloring based on Funding Amount
-      if (!funding || funding === 0) return [30, 40, 50, 150]; // Dark Gray/Blue for $0
-      if (funding < 50_000_000) return [198, 219, 239, 200]; 
-      if (funding < 250_000_000) return [158, 202, 225, 200];
-      if (funding < 1_000_000_000) return [107, 174, 214, 200];
-      if (funding < 5_000_000_000) return [49, 130, 189, 200];
-      return [8, 81, 156, 200]; // Deep Blue for massive funding
-    },
-    updateTriggers: {
-      getFillColor: [data] 
+  // 4. THE JAVASCRIPT BRIDGE: Splits "Marin; Monterey" fairly!
+  const fundingMap = useMemo(() => {
+    const map = new window.Map<string, number>();
+    if (!fundingData) return map;
+    
+    const rows = (fundingData as any).toArray();
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i] as any;
+      const iCounty = row.IssuerCounty || row.issuercounty;
+      const tFunding = row.total_funding || row.Total_funding;
+
+      if (iCounty) {
+        // Split the list and divide the money evenly
+        const countyList = String(iCounty).split(';');
+        const splitFunding = (Number(tFunding) || 0) / countyList.length;
+
+        for (const county of countyList) {
+          const cleanName = county.trim().toUpperCase();
+          const existingFunding = map.get(cleanName) || 0;
+          map.set(cleanName, existingFunding + splitFunding);
+        }
+      }
     }
-  });
+    return map;
+  }, [fundingData]);
 
-  if (!countiesReady || !bondsReady || !spatialReady || isLoading) {
+  // 5. Paint the Map
+  const layer = useMemo(() => {
+    if (!geojsonFeatures) return null;
+    
+    return new GeoJsonLayer({
+      id: 'counties-funding-layer',
+      data: geojsonFeatures as any,
+      pickable: true,
+      stroked: true,
+      filled: true,
+      lineWidthMinPixels: 1,
+      getLineColor: [255, 255, 255, 100],
+      getFillColor: (d: any) => {
+        const matchKey = d.properties.matchKey;
+        const funding = fundingMap.get(matchKey) || 0;
+        
+        if (funding === 0) return [30, 40, 50, 150]; 
+        if (funding < 50_000_000) return [198, 219, 239, 200]; 
+        if (funding < 250_000_000) return [158, 202, 225, 200];
+        if (funding < 1_000_000_000) return [107, 174, 214, 200];
+        if (funding < 5_000_000_000) return [49, 130, 189, 200];
+        return [8, 81, 156, 200]; 
+      },
+      updateTriggers: {
+        // CRITICAL: Force Deck.gl to repaint the instant Mosaic hands us new data
+        getFillColor: [fundingData] 
+      }
+    });
+  }, [geojsonFeatures, fundingMap, fundingData]);
+
+  // Render a loading screen while DuckDB downloads files
+  if (!countiesReady || !bondsReady || !spatialReady) {
     return (
       <div className="flex h-full w-full items-center justify-center bg-slate-900 text-slate-400">
-        <h1 className="text-xl tracking-widest animate-pulse">
-          {!countiesReady || !bondsReady ? "Downloading data lake..." : !spatialReady ? "Loading GIS Engine..." : "Calculating Spatial Intersections..."}
-        </h1>
+        <h1 className="text-xl tracking-widest animate-pulse">Loading spatial engine...</h1>
       </div>
     );
   }
@@ -140,10 +158,12 @@ export default function MapCanvas() {
       <DeckGL
         initialViewState={INITIAL_VIEW_STATE}
         controller={true}
-        layers={[layer]}
+        layers={layer ? [layer] : []}
         getTooltip={({ object }: any) => {
           if (!object) return null;
-          return `${object.properties.name} County\nFunding: ${formatMoney(object.properties.total_funding)}`;
+          const matchKey = object.properties.matchKey;
+          const funding = fundingMap.get(matchKey) || 0;
+          return `${object.properties.name} County\nFunding: ${formatMoney(funding)}`;
         }}
       >
         <Map mapStyle="https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json" />

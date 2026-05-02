@@ -2,7 +2,6 @@ import { useRoomStore } from './store';
 import { VgPlotChart, Spec } from '@sqlrooms/mosaic';
 
 export default function ControlCenter() {
-  // Wait until DuckDB has fully loaded your CDIAC Bonds CSV
   const tableReady = useRoomStore((state) => state.db.findTableByName('bonds'));
 
   if (!tableReady) {
@@ -13,7 +12,6 @@ export default function ControlCenter() {
     );
   }
 
-  // A declarative Mosaic JSON Specification (Properly typed!)
   const spec: Spec = {
     vconcat: [
       {
@@ -21,7 +19,7 @@ export default function ControlCenter() {
         label: "Filter by Primary Purpose: ",
         as: "$brush",
         from: "bonds",
-        column: "PrimaryPurpose" // Filtering by the column you actually care about!
+        column: "PrimaryPurpose" 
       },
       { vspace: 30 },
       {
@@ -30,7 +28,7 @@ export default function ControlCenter() {
             mark: "barX",
             data: { from: "bonds", filterBy: "$brush" },
             x: { sql: "SUM(PrincipalAmount)" },
-            y: "IssuerCounty", // Show the counties receiving the money in the chart
+            y: "IssuerCounty", 
             fill: "steelblue",
             sort: { y: "-x", limit: 10 } 
           }
