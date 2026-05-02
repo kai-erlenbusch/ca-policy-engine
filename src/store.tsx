@@ -2,7 +2,7 @@ import { createRoomShellSlice, createRoomStore, RoomShellSliceState } from '@sql
 import { createCommandSlice, CommandSliceState } from '@sqlrooms/room-store';
 import { createDuckDbSlice, DuckDbSliceState } from '@sqlrooms/duckdb';
 import { createMosaicSlice } from '@sqlrooms/mosaic'; 
-import { MosaicSliceState } from '@sqlrooms/mosaic/dist/MosaicSlice'; // 👈 ADD THIS IMPORT
+import { MosaicSliceState } from '@sqlrooms/mosaic/dist/MosaicSlice'; 
 import { MainView } from './components/MainView.tsx'; 
 
 export type RoomState = RoomShellSliceState & CommandSliceState & DuckDbSliceState & MosaicSliceState;
@@ -28,7 +28,7 @@ export const { roomStore, useRoomStore } = createRoomStore<RoomState>(
       layout: {
         config: {
           type: 'mosaic',
-          nodes: 'main', // Pass full control to MainView!
+          nodes: 'main', 
         },
         panels: {
           main: {
