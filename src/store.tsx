@@ -2,10 +2,10 @@ import { createRoomShellSlice, createRoomStore, RoomShellSliceState } from '@sql
 import { createCommandSlice, CommandSliceState } from '@sqlrooms/room-store';
 import { createDuckDbSlice, DuckDbSliceState } from '@sqlrooms/duckdb';
 import { createMosaicSlice } from '@sqlrooms/mosaic'; 
-import MapCanvas from './MapCanvas';
-import ControlCenter from './ControlCenter'; // Imported cleanly!
+import { MosaicSliceState } from '@sqlrooms/mosaic/dist/MosaicSlice'; // 👈 ADD THIS IMPORT
+import { MainView } from './components/MainView.tsx'; 
 
-export type RoomState = RoomShellSliceState & CommandSliceState & DuckDbSliceState;
+export type RoomState = RoomShellSliceState & CommandSliceState & DuckDbSliceState & MosaicSliceState;
 
 export const { roomStore, useRoomStore } = createRoomStore<RoomState>(
   (set, get, store) => ({
@@ -21,29 +21,19 @@ export const { roomStore, useRoomStore } = createRoomStore<RoomState>(
           {
             type: 'url',
             tableName: 'bonds',
-            url: '/data/bonds/california_debt_watch_detailed.csv',
+            url: '/data/bonds/california_debt_watch_detailed.csv', 
           }
         ],
       },
       layout: {
         config: {
           type: 'mosaic',
-          nodes: {
-            direction: 'row',
-            first: 'controls',
-            second: 'map',
-            splitPercentage: 25,
-          }
+          nodes: 'main', // Pass full control to MainView!
         },
         panels: {
-          controls: {
-            title: 'Control Center',
-            component: ControlCenter,
-            placement: 'sidebar'
-          },
-          map: {
-            title: 'Geospatial Map',
-            component: MapCanvas,
+          main: {
+            title: 'California Bonds Dashboard',
+            component: MainView,
             placement: 'main'
           }
         }
@@ -56,6 +46,7 @@ export const { roomStore, useRoomStore } = createRoomStore<RoomState>(
   })
 );
 
+// Load the Spatial extension
 roomStore.getState().room.initialize().then(async () => {
   try {
     const connector = await roomStore.getState().db.getConnector();
