@@ -1,0 +1,41 @@
+{
+  "name": "ca-policy-engine",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@deck.gl/aggregation-layers": "^9.0.0",
+    "@deck.gl/core": "^9.0.0",
+    "@deck.gl/geo-layers": "^9.0.0",
+    "@deck.gl/layers": "^9.0.0",
+    "@deck.gl/react": "^9.0.0",
+    "@sqlrooms/cosmos": "0.28.0",
+    "@sqlrooms/duckdb": "0.28.0",
+    "@sqlrooms/layout": "0.28.0",
+    "@sqlrooms/mosaic": "0.28.0",
+    "@sqlrooms/room-shell": "0.28.0",
+    "@sqlrooms/room-store": "0.28.0",
+    "@sqlrooms/ui": "0.28.0",
+    "@sqlrooms/utils": "0.28.0",
+    "apache-arrow": "17.0.0",
+    "lucide-react": "^0.474.0",
+    "maplibre-gl": "^4.7.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-map-gl": "^7.1.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.4",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.2.4",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5"
+  }
+}
