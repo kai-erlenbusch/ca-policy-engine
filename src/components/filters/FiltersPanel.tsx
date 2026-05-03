@@ -2,102 +2,80 @@ import { vg } from '@sqlrooms/mosaic';
 import { cn } from '@sqlrooms/ui';
 import { useEffect, useRef, useState } from 'react';
 import { roomStore } from '../../store';
-import { ChevronRight, Filter } from 'lucide-react'; 
+import { ChevronRight, LayoutDashboard } from 'lucide-react'; 
 
-function MosaicMenu({ table, column }: { table: string; column: string }) {
+function VolumeTimeline() {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const brush = roomStore.getState().mosaic.getSelection('brush');
-    const el = vg.menu({ from: table, column, as: brush });
-    if (ref.current) ref.current.replaceChildren(el); 
-  }, [table, column]);
-  return <div ref={ref} className="[&>select]:w-full [&>select]:rounded-md [&>select]:bg-slate-800 [&>select]:text-white [&>select]:p-2" />;
-}
-
-function MosaicSearch({ table, column }: { table: string; column: string }) {
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const brush = roomStore.getState().mosaic.getSelection('brush');
-    const el = vg.search({ from: table, column, as: brush });
-    if (ref.current) ref.current.replaceChildren(el); 
-  }, [table, column]);
-  return <div ref={ref} className="[&>input]:w-full [&>input]:rounded-md [&>input]:bg-slate-800 [&>input]:text-white [&>input]:p-2" />;
-}
-
-function TimelinePlot() {
-  const ref = useRef<HTMLDivElement>(null);
+  
   useEffect(() => {
     const brush = roomStore.getState().mosaic.getSelection('brush');
     const el = vg.plot(
-      vg.rectY(vg.from('bonds'), {
-        x: vg.bin('SaleDate'),
-        y: vg.sum('PrincipalAmount'),
-        fill: '#334155', 
-        inset: 0.5
-      }),
-      vg.rectY(vg.from('bonds', { filterBy: brush }), {
-        x: vg.bin('SaleDate'),
-        y: vg.sum('PrincipalAmount'),
-        fill: '#3b82f6', 
-        inset: 0.5
-      }),
+      // 👈 FIXED: Changed barY to rectY, added inset for styling!
+      vg.rectY(vg.from('bonds'), { x: vg.bin('SaleDate'), y: vg.sum('PrincipalAmount'), fill: '#334155', inset: 0.5 }),
+      vg.rectY(vg.from('bonds', { filterBy: brush }), { x: vg.bin('SaleDate'), y: vg.sum('PrincipalAmount'), fill: '#34d399', inset: 0.5 }),
       vg.intervalX({ as: brush }),
-      vg.xLabel('Sale Date'),
-      vg.yLabel('Total Principal ($)'),
-      vg.width(350),
-      vg.height(200),
-      vg.margins({left: 60, right: 10, top: 10, bottom: 40})
+      vg.yAxis(null),
+      vg.xLabel(null),
+      vg.width(320),
+      vg.height(150),
+      vg.margins({left: 10, right: 10, top: 10, bottom: 20})
     );
     if (ref.current) ref.current.replaceChildren(el);
   }, []);
-  return <div ref={ref} className="text-slate-300 [&_svg]:text-slate-300 [&_line]:stroke-slate-700 [&_path.domain]:stroke-slate-700" />;
+  
+  return <div ref={ref} className="text-slate-400 [&_svg]:text-slate-400 [&_line]:stroke-slate-700/50 [&_path.domain]:stroke-transparent" />;
+}
+
+function PurposeBarChart() {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const brush = roomStore.getState().mosaic.getSelection('brush');
+    const el = vg.plot(
+      vg.barX(vg.from('bonds'), { x: vg.sum('PrincipalAmount'), y: 'PrimaryPurpose', fill: '#334155', sort: { y: '-x', limit: 8 } }),
+      vg.barX(vg.from('bonds', { filterBy: brush }), { x: vg.sum('PrincipalAmount'), y: 'PrimaryPurpose', fill: '#22d3ee', sort: { y: '-x', limit: 8 } }),
+      vg.toggleY({ as: brush }),
+      vg.xAxis(null),
+      vg.yLabel(null),
+      vg.width(320),
+      vg.height(200),
+      vg.marginLeft(160) 
+    );
+    if (ref.current) ref.current.replaceChildren(el);
+  }, []);
+
+  return <div ref={ref} className="text-slate-400 [&_svg]:text-slate-400 [&_line]:stroke-slate-700/50 [&_path.domain]:stroke-transparent text-xs" />;
 }
 
 export default function FiltersPanel({className}: {className?: string}) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
-    <div className={cn(
-      'flex flex-col border-l border-slate-800 bg-slate-900/50 transition-all duration-300 ease-in-out overflow-hidden',
-      isCollapsed ? '!w-12 !min-w-[3rem] p-2 items-center' : 'p-4',
-      className
+    <div className={cn('flex flex-col transition-all duration-300 ease-in-out overflow-hidden pointer-events-auto',
+      isCollapsed ? '!w-12 !min-w-[3rem] p-2 items-center' : 'p-6 w-[380px]', className
     )}>
       {isCollapsed ? (
-        <button onClick={() => setIsCollapsed(false)} className="text-slate-400 hover:text-white mt-2 p-2 rounded hover:bg-slate-800 transition-colors" title="Expand Filters">
-          <Filter size={20} />
+        <button onClick={() => setIsCollapsed(false)} className="text-slate-400 hover:text-emerald-400 mt-2 p-2 rounded transition-colors bg-slate-900/80 backdrop-blur-md border border-slate-700/50">
+          <LayoutDashboard size={20} />
         </button>
       ) : (
-        <div className="w-full min-w-[280px] flex flex-col gap-6">
-          <div className="flex justify-between items-center text-white">
-            <h2 className="text-xl font-semibold">Bond Filters</h2>
-            <button onClick={() => setIsCollapsed(true)} className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition-colors" title="Hide Filters">
+        <div className="w-full flex flex-col gap-6">
+          <div className="flex justify-between items-center text-white pb-2 border-b border-slate-700/50">
+            <h2 className="text-lg font-bold tracking-wide">Analysis</h2>
+            <button onClick={() => setIsCollapsed(true)} className="text-slate-400 hover:text-white transition-colors">
               <ChevronRight size={20} />
             </button>
           </div>
           
-          <p className="text-sm text-slate-400">Use the dropdowns or <strong>drag on the timeline</strong> to filter the map.</p>
-          <hr className="border-slate-800" />
+          <div className="flex flex-col gap-8">
+            <div className="flex flex-col gap-2">
+              <label className="text-xs font-bold tracking-widest text-slate-500 uppercase">Issue Volume Over Time</label>
+              <VolumeTimeline />
+            </div>
 
-          <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium text-slate-300">Search Issuer</label>
-              <MosaicSearch table="bonds" column="Issuer" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium text-slate-300">Primary Purpose</label>
-              <MosaicMenu table="bonds" column="PrimaryPurpose" />
-            </div>
-            <div className="flex flex-col gap-2">
-              <label className="text-sm font-medium text-slate-300">Tax Status</label>
-              <MosaicMenu table="bonds" column="TaxStatus" />
-            </div>
-          </div>
-
-          <hr className="border-slate-800" />
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-slate-300">Funding over Time</label>
-            <div className="rounded-md bg-slate-800 p-2 overflow-hidden">
-               <TimelinePlot />
+              <label className="text-xs font-bold tracking-widest text-slate-500 uppercase">Top Sectors by Principal</label>
+              <PurposeBarChart />
             </div>
           </div>
         </div>
