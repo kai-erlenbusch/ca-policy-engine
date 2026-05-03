@@ -1,10 +1,10 @@
 import { SpinnerPane } from '@sqlrooms/ui';
 import { useRoomStore } from '../store';
 import MapView from './map/MapView';
-import FiltersPanel from './filters/FiltersPanel';
+import InspectorPanel from './filters/InspectorPanel'; // 👈 Updated to point to your new file!
 import BondTable from './BondTable';
 import TerminalDashboard from './TerminalDashboard'; 
-import NetworkView from './NetworkView'; // 👈 NEW: Imported the real Network Graph!
+import NetworkView from './NetworkView';
 import { useMosaicClient, Query, sql } from '@sqlrooms/mosaic';
 import { Table } from 'apache-arrow';
 import { useState } from 'react';
@@ -52,8 +52,6 @@ function KPIBar() {
     </div>
   );
 }
-
-// 👈 NOTE: We deleted the dummy NetworkView placeholder from here!
 
 // --- 3. Main Application Container ---
 export const MainView = () => {
@@ -104,7 +102,8 @@ export const MainView = () => {
         <>
           <MapView className="absolute inset-0 z-0" />
           <div className="absolute top-6 right-6 z-10 max-h-[calc(100vh-120px)] pointer-events-none">
-            <FiltersPanel className="pointer-events-auto rounded-2xl shadow-2xl border border-slate-700/50 bg-slate-950/70 backdrop-blur-xl" />
+            {/* 👈 Updated to inject your InspectorPanel! */}
+            <InspectorPanel className="pointer-events-auto rounded-2xl shadow-2xl border border-slate-700/50 bg-slate-950/70 backdrop-blur-xl" />
           </div>
           <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-10 pointer-events-none">
             <KPIBar />

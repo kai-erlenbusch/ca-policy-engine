@@ -96,29 +96,28 @@ const ESG_OPTIONS = [
 
 export default function MapView({className}: {className?: string}) {
   const [viewState, setViewState] = useState(INITIAL_VIEW_STATE);
-
-  // --- UI ARCHITECTURE STATE ---
   const [isExploreOpen, setIsExploreOpen] = useState(true);
-  const [mapDomain, setMapDomain] = useState<'bonds' | 'esg'>('bonds');
-
-  const [activeDistrict, setActiveDistrict] = useState<string | null>(null);
-  const [activeEsgLayer, setActiveEsgLayer] = useState<string | null>(null);
   
   const [districtGeoJson, setDistrictGeoJson] = useState<any>(null);
   const [isLoadingDistrict, setIsLoadingDistrict] = useState(false);
-
-  // --- NEW STATE FOR ESG LAYER ---
   const [esgGeoJson, setEsgGeoJson] = useState<any>(null);
   const [isLoadingEsg, setIsLoadingEsg] = useState(false);
-
-  // --- OZONE EXPLORER STATE ---
-  const [esgYear, setEsgYear] = useState<number>(2026);
-  const [ozoneMetric, setOzoneMetric] = useState<'exceedance' | 'concentration'>('exceedance');
   const [esgCountyGeoJson, setEsgCountyGeoJson] = useState<any>(null);
 
+  const mapDomain = useRoomStore((state) => state.mapDomain);
+  const setMapDomain = useRoomStore((state) => state.setMapDomain);
+  const activeDistrict = useRoomStore((state) => state.activeDistrict);
+  const setActiveDistrict = useRoomStore((state) => state.setActiveDistrict);
+  const activeEsgLayer = useRoomStore((state) => state.activeEsgLayer);
+  const setActiveEsgLayer = useRoomStore((state) => state.setActiveEsgLayer);
+  const esgYear = useRoomStore((state) => state.esgYear);
+  const setEsgYear = useRoomStore((state) => state.setEsgYear);
+  const ozoneMetric = useRoomStore((state) => state.ozoneMetric);
+  const setOzoneMetric = useRoomStore((state) => state.setOzoneMetric);
+  const setSelectedFeature = useRoomStore((state) => state.setSelectedFeature);
   const duckdb = useRoomStore((state) => state.db.connector);
 
-  // 1. BASE DEBT QUERY (Only visible in Muni Bonds domain)
+  // 1. BASE DEBT QUERY 
   const { data, isLoading } = useMosaicClient<Table>({
     selectionName: 'brush', 
     query: (filter: any) => {
@@ -162,7 +161,7 @@ export default function MapView({className}: {className?: string}) {
       features: rows.filter((r: any) => r.geojson).map((row: any) => ({
         type: 'Feature',
         geometry: JSON.parse(row.geojson),
-        properties: { CountyName: row.CountyName, Funding_Amount: row.Funding_Amount }
+        properties: { CountyName: row.CountyName, Funding_Amount: row.Funding_Amount, domain: 'bonds' } 
       }))
     } as any;
   }, [data]);
@@ -186,7 +185,7 @@ export default function MapView({className}: {className?: string}) {
         const result = await duckdb?.query(query);
         if (result) {
           const features = result.toArray().map((row: any) => ({
-            type: 'Feature', geometry: JSON.parse(row.feature), properties: row
+            type: 'Feature', geometry: JSON.parse(row.feature), properties: { ...row, domain: 'district' }
           }));
           setDistrictGeoJson({ type: 'FeatureCollection', features });
         }
@@ -212,8 +211,6 @@ export default function MapView({className}: {className?: string}) {
       try {
         const origin = window.location.origin;
         const metricUrl = `${origin}/data/enviroscreen/${activeEsgLayer}.parquet`;
-        
-        // Catch both TRI facilities AND your Air Quality/Pesticide mapped monitors
         const isPointData = activeEsgLayer?.includes('facilities') || activeEsgLayer?.includes('mapped');
 
         setEsgCountyGeoJson(null); 
@@ -222,13 +219,11 @@ export default function MapView({className}: {className?: string}) {
         let countyQuery = ''; 
 
         if (activeEsgLayer?.includes('tri_facilities')) {
-          // TRI Point Data
           query = `
             SELECT ST_AsGeoJSON(ST_Point("13. LONGITUDE", "12. LATITUDE")) as feature, * FROM read_parquet('${metricUrl}')
             WHERE "13. LONGITUDE" IS NOT NULL AND "12. LATITUDE" IS NOT NULL
           `;
         } else if (isPointData) {
-          // Air Quality Point Data
           const yearFilter = activeEsgLayer?.includes('air_quality') ? `AND Year = ${esgYear}` : '';
           
           query = `
@@ -236,7 +231,6 @@ export default function MapView({className}: {className?: string}) {
             WHERE Longitude IS NOT NULL AND Latitude IS NOT NULL ${yearFilter}
           `;
 
-          // NEW: The County Aggregation Query (Only for Ozone right now)
           if (activeEsgLayer?.includes('ozone')) {
             countyQuery = `
               SELECT 
@@ -249,9 +243,21 @@ export default function MapView({className}: {className?: string}) {
               WHERE m.Year = ${esgYear}
               GROUP BY c.NAME10, c.geometry
             `;
+          } else if (activeEsgLayer?.includes('pm25')) {
+             // 🧠 PM 2.5 County Background Query
+            countyQuery = `
+              SELECT 
+                ST_AsGeoJSON(ST_FlipCoordinates(ST_Transform(c.geometry, 'EPSG:3857', 'EPSG:4326'))) as feature,
+                c.NAME10 as County,
+                MAX(m.Daily_Avg_PM25) as Daily_Avg_PM25,
+                MAX(m.Days_Above_Std) as Days_Above_Std
+              FROM counties c
+              JOIN read_parquet('${metricUrl}') m ON c.NAME10 = m.County
+              WHERE m.Year = ${esgYear}
+              GROUP BY c.NAME10, c.geometry
+            `;
           }
         } else {
-          // Choropleth Data
           const tractsUrl = `${origin}/data/enviroscreen/geometries/ca_tracts_clean.parquet`;
           const joinKey = activeEsgLayer?.includes('diabetes') ? 'Tract' : 'Census_Tract';
           
@@ -262,21 +268,19 @@ export default function MapView({className}: {className?: string}) {
           `;
         }
 
-        // 1. Execute Points/Tracts Query
         const result = await duckdb?.query(query);
         if (result) {
           const features = result.toArray().map((row: any) => ({
-            type: 'Feature', geometry: JSON.parse(row.feature), properties: row
+            type: 'Feature', geometry: JSON.parse(row.feature), properties: { ...row, domain: 'esg' }
           }));
           setEsgGeoJson({ type: 'FeatureCollection', features });
         }
 
-        // 2. NEW: Execute County Background Query
         if (countyQuery) {
           const countyResult = await duckdb?.query(countyQuery);
           if (countyResult) {
             const cFeatures = countyResult.toArray().map((row: any) => ({
-              type: 'Feature', geometry: JSON.parse(row.feature), properties: row
+              type: 'Feature', geometry: JSON.parse(row.feature), properties: { ...row, domain: 'esg_county' }
             }));
             setEsgCountyGeoJson({ type: 'FeatureCollection', features: cFeatures });
           }
@@ -332,10 +336,8 @@ export default function MapView({className}: {className?: string}) {
     });
   }, [districtGeoJson, mapDomain]);
 
-  // --- NEW: ESG COUNTY BASE LAYER (For Air Quality) ---
   const esgCountyLayer = useMemo(() => {
     if (!esgCountyGeoJson || mapDomain !== 'esg') return null;
-
     return new GeoJsonLayer({
       id: 'esg-county-layer',
       data: esgCountyGeoJson,
@@ -346,29 +348,39 @@ export default function MapView({className}: {className?: string}) {
       getLineColor: [255, 255, 255, 30],
       getFillColor: (d: any) => {
          const props = d.properties;
-         // Note the lower opacity values (e.g., 120) so dots pop on top!
-         if (ozoneMetric === 'exceedance') {
-           const days = Number(props.Exceedance_Days_070) || 0;
+         
+         // Ozone Coloring
+         if (activeEsgLayer?.includes('ozone')) {
+           if (ozoneMetric === 'exceedance') {
+             const days = Number(props.Exceedance_Days_070) || 0;
+             if (days === 0) return [16, 185, 129, 100]; 
+             if (days <= 5) return [234, 179, 8, 120];    
+             if (days <= 15) return [249, 115, 22, 140];  
+             return [239, 68, 68, 160];                   
+           } else {
+             const conc = Number(props.Max_8hr_Ozone) || 0;
+             if (conc < 0.070) return [16, 185, 129, 100]; 
+             if (conc <= 0.075) return [234, 179, 8, 120]; 
+             if (conc <= 0.085) return [249, 115, 22, 140];
+             return [239, 68, 68, 160];                    
+           }
+         } 
+         // 🧠 PM 2.5 County Coloring
+         else if (activeEsgLayer?.includes('pm25')) {
+           const days = Number(props.Days_Above_Std) || 0;
            if (days === 0) return [16, 185, 129, 100]; 
-           if (days <= 5) return [234, 179, 8, 120];    
-           if (days <= 15) return [249, 115, 22, 140];  
-           return [239, 68, 68, 160];                   
-         } else {
-           const conc = Number(props.Max_8hr_Ozone) || 0;
-           if (conc < 0.070) return [16, 185, 129, 100]; 
-           if (conc <= 0.075) return [234, 179, 8, 120]; 
-           if (conc <= 0.085) return [249, 115, 22, 140];
-           return [239, 68, 68, 160];                    
+           if (days <= 2) return [234, 179, 8, 120];    
+           if (days <= 10) return [249, 115, 22, 140];  
+           return [239, 68, 68, 160];  
          }
+         return [0,0,0,0];
       },
-      updateTriggers: { getFillColor: [ozoneMetric] }
+      updateTriggers: { getFillColor: [ozoneMetric, activeEsgLayer] }
     });
-  }, [esgCountyGeoJson, mapDomain, ozoneMetric]);
+  }, [esgCountyGeoJson, mapDomain, ozoneMetric, activeEsgLayer]);
 
-  // --- NEW: ESG LAYER RENDERING ---
   const esgLayer = useMemo(() => {
     if (!esgGeoJson || mapDomain !== 'esg') return null;
-
     return new GeoJsonLayer({
       id: 'esg-metric-layer',
       data: esgGeoJson,
@@ -377,47 +389,41 @@ export default function MapView({className}: {className?: string}) {
       filled: true,
       lineWidthMinPixels: 1,
       pointRadiusMinPixels: 4, 
-      
-      // Dynamic Sizing based on selected metric
       getPointRadius: (d: any) => {
         const props = d.properties;
-        // Specific sizing for Ozone points
         if (activeEsgLayer?.includes('ozone')) {
-          if (ozoneMetric === 'exceedance') {
-            // Base size 1000m + 100m per exceedance day
-            return 1000 + (Number(props.Exceedance_Days_070 || 0) * 100); 
-          } else {
-            // Size by concentration
-            return 1000 + (Number(props.Max_8hr_Ozone || 0) * 50000);
-          }
+          if (ozoneMetric === 'exceedance') return 1000 + (Number(props.Exceedance_Days_070 || 0) * 100); 
+          else return 1000 + (Number(props.Max_8hr_Ozone || 0) * 50000);
+        } else if (activeEsgLayer?.includes('pm25')) {
+          return 1000 + (Number(props.Days_Above_Std || 0) * 500);
         }
-        return 2500; // Default for other point data
+        return 2500;
       },
-      
       getLineColor: [255, 255, 255, 20],
-      
-      // Dynamic Coloring based on selected metric
       getFillColor: (d: any) => {
          const props = d.properties;
-         
-         // 1. OZONE SPECIFIC COLORING
          if (activeEsgLayer?.includes('ozone')) {
            if (ozoneMetric === 'exceedance') {
              const days = Number(props.Exceedance_Days_070) || 0;
-             if (days === 0) return [16, 185, 129, 200];  // Green (0 days)
-             if (days <= 5) return [234, 179, 8, 200];    // Yellow (1-5 days)
-             if (days <= 15) return [249, 115, 22, 220];  // Orange (6-15 days)
-             return [239, 68, 68, 240];                   // Red (16+ days)
+             if (days === 0) return [16, 185, 129, 200];  
+             if (days <= 5) return [234, 179, 8, 200];    
+             if (days <= 15) return [249, 115, 22, 220];  
+             return [239, 68, 68, 240];                   
            } else {
              const conc = Number(props.Max_8hr_Ozone) || 0;
-             if (conc < 0.070) return [16, 185, 129, 200]; // Green (Below EPA standard)
-             if (conc <= 0.075) return [234, 179, 8, 200]; // Yellow
-             if (conc <= 0.085) return [249, 115, 22, 220];// Orange
-             return [239, 68, 68, 240];                    // Red (Severe)
+             if (conc < 0.070) return [16, 185, 129, 200]; 
+             if (conc <= 0.075) return [234, 179, 8, 200]; 
+             if (conc <= 0.085) return [249, 115, 22, 220];
+             return [239, 68, 68, 240];                    
            }
+         } else if (activeEsgLayer?.includes('pm25')) {
+             const days = Number(props.Days_Above_Std) || 0;
+             if (days === 0) return [16, 185, 129, 200];  
+             if (days <= 2) return [234, 179, 8, 200];    
+             if (days <= 10) return [249, 115, 22, 220];  
+             return [239, 68, 68, 240]; 
          }
-
-         // 2. Try to find Percentiles OR Diabetes "Score"
+         
          const pctKey = Object.keys(props).find(k => 
            k.toLowerCase().includes('percentile') || 
            k.toLowerCase().includes('pctl') || 
@@ -426,13 +432,12 @@ export default function MapView({className}: {className?: string}) {
          
          if (pctKey) {
             const score = Number(props[pctKey]) || 0;
-            if (score < 25) return [16, 185, 129, 180]; // Emerald
-            if (score < 50) return [234, 179, 8, 180];  // Yellow
-            if (score < 75) return [249, 115, 22, 200]; // Orange
-            return [239, 68, 68, 220];                  // Red
+            if (score < 25) return [16, 185, 129, 180]; 
+            if (score < 50) return [234, 179, 8, 180];  
+            if (score < 75) return [249, 115, 22, 200]; 
+            return [239, 68, 68, 220];                  
          }
 
-         // 3. Fallback for Lead Housing Risk
          if (props.Total_Lead_Risk_Factors !== undefined) {
             const risk = Number(props.Total_Lead_Risk_Factors) || 0;
             if (risk <= 1) return [16, 185, 129, 180];
@@ -441,7 +446,6 @@ export default function MapView({className}: {className?: string}) {
             return [239, 68, 68, 220];
          }
 
-         // 4. Fallback for Socioeconomic (Map by Poverty Count)
          if (props.Count_Below_Poverty !== undefined) {
             const pov = Number(props.Count_Below_Poverty) || 0;
             if (pov < 500) return [16, 185, 129, 180];
@@ -450,8 +454,7 @@ export default function MapView({className}: {className?: string}) {
             return [239, 68, 68, 220];
          }
 
-         // 5. Default for other Point Data
-         return [34, 211, 238, 200]; // Cyan dots
+         return [34, 211, 238, 200]; 
       },
       updateTriggers: {
         getFillColor: [ozoneMetric, activeEsgLayer],
@@ -467,13 +470,18 @@ export default function MapView({className}: {className?: string}) {
           viewState={viewState}
           onViewStateChange={({viewState: next}) => setViewState(next as ViewState)}
           controller={true}
-          // The layers are drawn from bottom to top, so the points sit on top of the counties!
           layers={[polygonLayer, specialDistrictLayer, esgCountyLayer, esgLayer]}
+          onClick={({object}: any) => {
+            if (object && object.properties) {
+              setSelectedFeature(object.properties);
+            } else {
+              setSelectedFeature(null); 
+            }
+          }}
           getTooltip={({object}: any) => {
             if (!object) return null;
             const props = object.properties;
 
-            // Bonds Tooltip
             if (mapDomain === 'bonds' && props.CountyName) {
               const fundingInBillions = (props.Funding_Amount / 1_000_000_000).toFixed(2);
               return {
@@ -481,21 +489,76 @@ export default function MapView({className}: {className?: string}) {
               };
             }
 
-            // ESG Layer Tooltips
             if (mapDomain === 'esg') {
-
-              // NEW: County Background Tooltip
-              if (props.County && !props.Monitor_Name) {
-                return {
-                  html: `<div style="font-family:system-ui; font-size:12px; padding:4px;">
-                           <strong>${props.County} County (Highest Monitor)</strong><br/>
-                           Max 8hr Ozone: ${props.Max_8hr_Ozone || 'N/A'} ppm<br/>
-                           Exceedance Days (0.070): ${props.Exceedance_Days_070 || 0}
-                         </div>`
+              // 🧠 PM 2.5 Tooltips
+              if (activeEsgLayer?.includes('pm25')) {
+                if (props.County && !props.Monitor_Name) {
+                  return {
+                    html: `<div style="font-family:system-ui; font-size:12px; padding:4px;">
+                             <strong>${props.County} County (Worst PM 2.5)</strong><br/>
+                             Max 1-Day Avg: ${props.Daily_Avg_PM25 || 'N/A'} µg/m³<br/>
+                             Days Above Std: ${props.Days_Above_Std || 0}
+                           </div>`
+                  }
+                }
+                if (props.Monitor_Name) {
+                  return {
+                    html: `<div style="font-family:system-ui; font-size:12px; padding:4px;">
+                             <strong>Monitor:</strong> ${props.Monitor_Name}<br/>
+                             County: ${props.County}<br/>
+                             Max 1-Day Avg: ${props.Daily_Avg_PM25 || 'N/A'} µg/m³<br/>
+                             Days Above Std: ${props.Days_Above_Std || 0}
+                           </div>`
+                  }
                 }
               }
-              
-              // TRI Facilities Point Data
+
+              // Ozone Tooltips
+              if (activeEsgLayer?.includes('ozone')) {
+                if (props.County && !props.Monitor_Name) {
+                  return {
+                    html: `<div style="font-family:system-ui; font-size:12px; padding:4px;">
+                             <strong>${props.County} County (Highest Monitor)</strong><br/>
+                             Max 8hr Ozone: ${props.Max_8hr_Ozone || 'N/A'} ppm<br/>
+                             Exceedance Days (0.070): ${props.Exceedance_Days_070 || 0}
+                           </div>`
+                  }
+                }
+                if (props.Monitor_Name) {
+                  return {
+                    html: `<div style="font-family:system-ui; font-size:12px; padding:4px;">
+                             <strong>Monitor:</strong> ${props.Monitor_Name}<br/>
+                             County: ${props.County}<br/>
+                             Max 8hr Ozone: ${props.Max_8hr_Ozone || 'N/A'} ppm<br/>
+                             Exceedance Days (0.070): ${props.Exceedance_Days_070 || 0}
+                           </div>`
+                  }
+                }
+              }
+
+              // 👇 NEW: Asthma Tooltip (Multiple numbers, cleanly rounded)
+              if (activeEsgLayer?.includes('asthma') && props.Asthma_ER_Rate) {
+                return {
+                  html: `<div style="font-family:system-ui; font-size:12px; padding:4px;">
+                           <strong>Tract:</strong> ${props.Census_Tract || props.Tract}<br/>
+                           <strong>ER Visit Rate:</strong> ${Number(props.Asthma_ER_Rate).toFixed(1)}<br/>
+                           <strong>State Percentile:</strong> ${Number(props.Asthma_Percentile).toFixed(1)}
+                         </div>`
+                };
+              }
+
+              // 👇 NEW: Cardiovascular Tooltip (Multiple numbers, cleanly rounded)
+              if (activeEsgLayer?.includes('cardiovascular') && props.Cardiovascular_ER_Rate) {
+                return {
+                  html: `<div style="font-family:system-ui; font-size:12px; padding:4px;">
+                           <strong>Tract:</strong> ${props.Census_Tract || props.Tract}<br/>
+                           <strong>ER Visit Rate:</strong> ${Number(props.Cardiovascular_ER_Rate).toFixed(1)}<br/>
+                           <strong>State Percentile:</strong> ${Number(props.Cardiovascular_Percentile).toFixed(1)}
+                         </div>`
+                };
+              }
+
+              // Other Tooltips
               if (props['4. FACILITY NAME']) {
                 return {
                   html: `<div style="font-family:system-ui; font-size:12px; padding:4px;">
@@ -506,22 +569,9 @@ export default function MapView({className}: {className?: string}) {
                 }
               }
 
-              // Air Quality Point Data (Ozone)
-              if (props.Monitor_Name) {
-                return {
-                  html: `<div style="font-family:system-ui; font-size:12px; padding:4px;">
-                           <strong>Monitor:</strong> ${props.Monitor_Name}<br/>
-                           County: ${props.County}<br/>
-                           Max 8hr Ozone: ${props.Max_8hr_Ozone || 'N/A'} ppm<br/>
-                           Exceedance Days (0.070): ${props.Exceedance_Days_070 || 0}
-                         </div>`
-                }
-              }
-
-              // Choropleth Data (Dynamic Metric Finder)
               const metricKey = Object.keys(props).find(k => 
                 k.toLowerCase().includes('percentile') || 
-                k.toLowerCase().includes('pctl') ||
+                k.toLowerCase().includes('pctl') || 
                 k.toLowerCase().includes('score') ||
                 k === 'Total_Lead_Risk_Factors' || 
                 k === 'Count_Below_Poverty' ||
@@ -529,9 +579,14 @@ export default function MapView({className}: {className?: string}) {
               );
               
               if (metricKey) {
+                const rawValue = props[metricKey];
+                const displayValue = (!isNaN(Number(rawValue)) && Number(rawValue) % 1 !== 0) 
+                  ? Number(rawValue).toFixed(1) 
+                  : rawValue;
+
                 return {
                   html: `<div style="font-family:system-ui; font-size:12px; padding:4px;">
-                           <strong>${metricKey.replace(/_/g, ' ')}:</strong> ${props[metricKey]}
+                           <strong>${metricKey.replace(/_/g, ' ')}:</strong> ${displayValue}
                          </div>`
                 };
               }
@@ -601,7 +656,6 @@ export default function MapView({className}: {className?: string}) {
                   </div>
                   
                   <div className="flex flex-col gap-1.5 max-h-[350px] overflow-y-auto pr-2 custom-scrollbar">
-                    {/* --- NESTED UI EXPLORER MAPPING --- */}
                     {ESG_OPTIONS.map((option) => (
                       <div key={option.label} className="flex flex-col gap-1">
                         <button
@@ -611,11 +665,9 @@ export default function MapView({className}: {className?: string}) {
                           {option.label}
                         </button>
 
-                        {/* --- OZONE CONTROL PANEL (Only shows when Ozone is active) --- */}
+                        {/* Ozone Specific Controls */}
                         {activeEsgLayer === option.file && option.label.includes('Ozone') && (
                           <div className="animate-in slide-in-from-top-2 flex flex-col gap-3 bg-slate-950/50 p-3 rounded-lg border border-slate-800 ml-2 mb-1">
-                            
-                            {/* Metric Switcher */}
                             <div className="flex bg-slate-900 rounded-md p-1 border border-slate-700">
                               <button 
                                 onClick={() => setOzoneMetric('exceedance')}
@@ -630,8 +682,24 @@ export default function MapView({className}: {className?: string}) {
                                 Max Concentration
                               </button>
                             </div>
+                            <div className="flex flex-col gap-1 mt-1">
+                              <div className="flex justify-between text-xs text-slate-400 font-medium">
+                                <span>Timeline</span>
+                                <span className="text-white font-bold">{esgYear}</span>
+                              </div>
+                              <input 
+                                type="range" min="2006" max="2026" step="1"
+                                value={esgYear}
+                                onChange={(e) => setEsgYear(Number(e.target.value))}
+                                className="w-full accent-rose-500"
+                              />
+                            </div>
+                          </div>
+                        )}
 
-                            {/* Year Slider */}
+                        {/* PM 2.5 Specific Controls */}
+                        {activeEsgLayer === option.file && option.label.includes('PM 2.5') && (
+                          <div className="animate-in slide-in-from-top-2 flex flex-col gap-3 bg-slate-950/50 p-3 rounded-lg border border-slate-800 ml-2 mb-1">
                             <div className="flex flex-col gap-1 mt-1">
                               <div className="flex justify-between text-xs text-slate-400 font-medium">
                                 <span>Timeline</span>
